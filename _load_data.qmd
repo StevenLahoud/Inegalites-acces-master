@@ -1,0 +1,80 @@
+```{r}
+#| label: load-libs
+
+library(tidyverse)
+library(gt)
+library(sf)
+library(scatterpie)
+
+```
+
+```{r}
+#| label: download
+
+# Download all data
+library(fs)
+
+if (!dir_exists("DATA")) {
+  message(glue::glue("Creating directory DATA in {getwd()}"))
+  dir_create("DATA")
+}
+
+dl_resource <- function(name, url) {
+  p <- path("DATA", name)
+  if (!file_exists(p)) {
+    message(glue::glue("Downloading {name}"))
+    download.file(url, p)
+    message(glue::glue("Downloaded {name}"))
+  }
+}
+
+dl_resource(
+  "monmaster.csv",
+  "https://data.enseignementsup-recherche.gouv.fr/api/explore/v2.1/catalog/datasets/fr-esr-mon_master/exports/csv"
+)
+
+dl_resource(
+  "metadata.pdf",
+  "https://data.enseignementsup-recherche.gouv.fr/api/explore/v2.1/catalog/datasets/fr-esr-mon_master/attachments/methodologie_opendata_monmaster_2025pdf"
+)
+
+dl_resource(
+  "academies.geojson",
+  "https://data.education.gouv.fr/api/explore/v2.1/catalog/datasets/fr-en-contour-academies-2020/exports/geojson"
+)
+
+detach(package:fs)
+
+```
+
+{{< include _utils.qmd >}}
+
+```{r}
+#| label: load-data
+
+# Load data into R objects
+monmaster <-
+  read_delim("DATA/monmaster.csv", delim = ';', col_types = monmaster_types) |>
+  mutate(disci_master = fct(str_replace_all(disci_master, "\\.", "")))
+
+monmaster24 <- filter(monmaster, session == "2024") |> select(!session)
+monmaster25 <- filter(monmaster, session == "2025") |> select(!session)
+
+academies <-
+  read_sf("DATA/academies.geojson") |>
+  # Make column names and types match with the ones from monmaster
+  mutate(
+    .keep = "none",
+    acad = ordered(paste0("A", code_academie), levels = code_acad),
+    acad_lib = name,
+    acad_lib_maj = libelle_aca_majuscules,
+    acad_reg = ordered(paste0("R", code_region_2016), levels = code_region),
+    acad_reg_lib = libelle_region_2016,
+    geometry = geometry
+  )
+
+suppressWarnings(
+  academies_metro <- st_crop(academies, xmin = -5, xmax = 10, ymin = 41, ymax = 52)
+)
+
+```

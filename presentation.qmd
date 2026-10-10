@@ -1,0 +1,206 @@
+---
+title: "Les masters en France"
+subtitle: "Une collection de disparités intéressantes"
+format: revealjs
+---
+
+{{< include _load_data.qmd >}}
+
+## Contenu du Dataset
+
+. . .
+
+Résultats de MonMaster des années 2024 et 2025.
+
+:::: {.columns}
+
+::: {.fragment .column width="40%"}
+**Informations sur une formation**
+
+- Établissement, académie, région
+- Mention, domaine d'étude, alternance
+- Nombre de places
+:::
+
+::: {.fragment .column width="60%"}
+**Totaux**
+
+- Candidats, classés par établissement, Proposition d'admission, Acceptations
+- Provenance des candidats (même établissement, même académie...)
+- Formation de l'année précédente
+- Nombre de femmes
+:::
+
+::::
+
+## Une observation typique
+
+```{r}
+slice(monmaster, 14680, 2895, 15442) |>
+  mutate(
+    .keep = "none",
+    Session = session,
+    Université = eta_nom,
+    Académie = acad_lib,
+    Nom = parcours,
+    Domaine = secteur_disci_lib,
+    Capacité = col,
+    Candidatures = n_can_pp + n_can_pc,
+    "Candidatures femme" = n_can_femme_pp + n_can_femme_pc,
+    "Candidatures licence" = n_can_lg3_pp + n_can_lp3_pp + n_can_lg3_pc + n_can_lp3_pc,
+    Acceptations = n_accept_total,
+    "Femme acceptées" = n_accept_femme_total,
+   ) |>
+  gt() |>
+  tab_style(
+    locations = cells_column_labels(),
+    style = cell_text(weight = "bold", align = "center")
+  )
+```
+
+# Métropole vs outre-mer
+
+## Étudiants par académie
+
+```{r}
+#| label: fig-master-count
+#| fig-cap: Nombre d'étudiants par académie
+
+monmaster |>
+  count(acad, acad_lib, wt = n_accept_total) |>
+  mutate(acad_lib = fct_reorder(acad_lib, desc(n)),
+         is_overseas = acad %in% overseas) |>
+  ggplot(aes(x = acad_lib, y = n, fill = is_overseas)) +
+  geom_col() +
+  labs(x = "Académie", y = "Nombre d'étudiant", fill = "Outre-mer") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+```
+
+## Sédentarité des étudiants
+
+```{r}
+#| label: fig-internal-recruitment
+#| fig-cap: Pourcentage moyen d'étudiants venant du même établissement
+
+monmaster |>
+  mutate(is_overseas = acad %in% overseas) |>
+  ggplot(aes(x = is_overseas, y = pct_accept_etab, fill = is_overseas)) +
+  geom_boxplot(na.rm = TRUE) +
+  labs(y = "Pourcentage des étudiants",
+       fill = "Outre-mer") +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+```
+
+# Répartition homme/femme
+
+## Répartition selon les domaines généraux
+
+```{r}
+#| label: fig-mosaic
+#| fig-cap: Répartition par nombre d'acceptations
+
+do_mosaic <- function(data, female, male, cat, wrap = 25, main = "", ...) {
+  data <- mutate(data, category = str_wrap(!!ensym(cat), wrap))
+  data |>
+    select(Femme = !!ensym(female), Homme = !!ensym(male)) |>
+    data.frame(row.names = as.character(data$category)) |>
+    mosaicplot(
+      main = main,
+      color = c("#FFC0CB99", "#87CEEB99"),
+      ...
+    )
+}
+
+old_par <- par(mar = c(.5, 4, 3, 2))
+
+monmaster |>
+  summarize(
+    Female_can = sum(n_can_femme_pp + n_can_femme_pc),
+    Male_can = sum(n_can_pp + n_can_pc) - Female_can,
+    Female_accept = sum(n_accept_femme_total),
+    Male_accept = sum(n_accept_total) - Female_accept,
+    .by = disci_master
+  ) |>
+  do_mosaic(Female_accept, Male_accept, disci_master)
+
+par(old_par)
+```
+
+## Focus sur les sciences
+
+```{r}
+#| label: fig-mosaic-science
+#| fig-cap: Répartition dans les sous-domaines scientifiques
+
+old_par <- par(mar = c(0, 0, 0, 0))
+
+monmaster |>
+  filter(disci_master == "Sc fondamentales et appliquées (dont STAPS)") |>
+  summarize(
+    Female_accept = sum(n_accept_femme_total),
+    Male_accept = sum(n_accept_total) - Female_accept,
+    .by = secteur_disci_lib
+  ) |>
+  filter(Female_accept + Male_accept >= 1000) |>
+  do_mosaic(Female_accept, Male_accept, secteur_disci_lib, las=3)
+
+par(old_par)
+```
+
+# Antécédents académiques des candidats
+
+## Antécédents académiques des candidats
+
+```{r}
+#| label: fig-previous-year
+#| layout-ncol: 2
+#| fig-cap: Type d'année faite avant acceptation dans un master
+#| fig-subcap:
+#|   - France sauf IdF
+#|   - Île-de-France
+
+nb_student <- monmaster |>
+  summarise(
+    Total = sum(n_accept_total),
+    Licence = sum(n_accept_lg3_total),
+    `Licence pro` = sum(n_accept_lp3_total),
+    Bachelor = sum(n_accept_but3_total),
+    Master = sum(n_accept_master_total),
+    Autre = sum(n_accept_autre_total),
+    `Non inscrit en France` = sum(n_accept_noninscri_total),
+    .by = acad
+  ) |>
+  inner_join(academies_metro, by = "acad") |>
+  mutate(center = geometry |> st_centroid() |> st_coordinates()) |>
+  mutate(
+    .keep = "unused",
+    x = center[, "X"],
+    y = center[, "Y"]
+  )
+
+do_previous_year_map <- function(data, scale.x, scale.y, labeller, ...) {
+  ggplot(data) +
+    geom_sf(data = st_as_sf, fill = "grey95", color = "black") +
+    geom_scatterpie(
+      aes(x, y, r = radius),
+      cols = c("Licence", "Licence pro", "Bachelor", "Master", "Autre", "Non inscrit en France"),
+      color = NA
+    ) +
+    geom_scatterpie_legend(data$radius, scale.x, scale.y, n = 3, labeller = labeller) +
+    scale_fill_brewer(palette = "Set3") +
+    labs(fill = "Année précédente", ...) +
+    theme_void()
+}
+
+nb_student |>
+  filter(acad_reg != "R11") |>
+  mutate(radius = sqrt(Total) / 250) |>
+  do_previous_year_map(-4, 43, \(y) (y * 250)^2)
+
+nb_student |>
+  filter(acad_reg == "R11") |>
+  mutate(radius = sqrt(Total) / 1200) |>
+  do_previous_year_map(1.5, 48.3, \(y) (y * 1200)^2)
+```

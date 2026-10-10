@@ -1,0 +1,262 @@
+---
+title: "Master's program in France"
+subtitle: "A collection of interesting disparities"
+format: html
+---
+
+{{< include _load_data.qmd >}}
+
+# Dataset Used in this Study
+
+For this project, we will analyse the admission results of every Master's degree program in France via the official application platform MonMaster. It is publicly available on the [open data website](https://data.enseignementsup-recherche.gouv.fr/explore/dataset/fr-esr-mon_master) of the Ministry of Higher Education.
+
+The dataset includes every program available on the platform during the 2024 and 2025 sessions, providing details about the program (university, geographical location, field of study, whether it operates as a work-study program...) as well as the total number of applications, the applications considered by the university (i.e. waitlisted), the number of admission offers made, the final enrollment figures... These counts are further divided by the gender and prior degrees.
+
+Here is a sample of the data that we will be working with:
+
+```{r}
+#| label: monmaster-sample
+#| column: screen-inset
+
+# Example of lines from monmaster
+slice(monmaster, 14680, 2895, 15442) |>
+  mutate(
+    .keep = "none",
+    Session = session,
+    University = eta_nom,
+    Region = acad_reg_lib,
+    Academy = acad_lib,
+    "Program Name" = parcours,
+    Domain = secteur_disci_lib,
+    "Available slots" = col,
+    "#Applications" = n_can_pp + n_can_pc,
+    "#Female applications" = n_can_femme_pp + n_can_femme_pc,
+    "#Applications from undergrads" = n_can_lg3_pp + n_can_lp3_pp + n_can_lg3_pc + n_can_lp3_pc,
+    "#Accepted students" = n_accept_total,
+    "#Accepted women" = n_accept_femme_total,
+   ) |>
+  gt()
+
+```
+
+In order to represent our data on maps, we will also use [this data set](https://data.education.gouv.fr/explore/assets/fr-en-contour-academies-2020/) from the Ministry of Education which contains the geographical informations necessary to draw the academies on a map. Here is what is looks like:
+
+```{r}
+#| label: academies-sample
+
+# Academies map
+ggplot(academies_metro) +
+  geom_sf(aes(fill = acad_lib), color = "white", size = .3) +
+  scale_fill_discrete(name = "Academy") +
+  theme_void()
+
+```
+
+This data will allow us to point out some disparities or inequalities that we find noteworthy.
+
+# Metropolitan France vs Overseas Territories
+
+The clear separation between metropolitan France and its overseas territories appears quite often in statistical analysis of France. Let's see if our dataset also presents this splitting.
+
+```{r}
+#| label: master-count
+
+# Student count in each academy, colored by overseas-ness
+monmaster |>
+  count(acad, acad_lib, wt = n_accept_total) |>
+  mutate(acad_lib = fct_reorder(acad_lib, desc(n)),
+         is_overseas = acad %in% overseas) |>
+  ggplot(aes(x = acad_lib, y = n, fill = is_overseas)) +
+  geom_col() +
+  labs(x = "Academy", y = "Number of students", fill = "Overseas territory",
+       title = "Number of students in 2024 + 2025 per academy") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+```
+
+In this first histogram, we can see that the overseas territories, as well as Corsica, have the smallest number of students. Martinique and Mayotte do not appear at all, which means that there are no Master's degree programs on those islands. On the other hand, Paris is by far the major academic center with twice as many students as the second-largest academy, Lille.
+
+However this graph does not take the population of each academy into account. With demographic data, we could compute students per capita. Since this information is not available, we will try to highlight another from of disparity: **student mobility**.
+
+```{r}
+#| label: internal-recruitment
+
+# Internal recruitment in overseas vs metropole
+monmaster |>
+  mutate(is_overseas = acad %in% overseas) |>
+  ggplot(aes(x = is_overseas, y = pct_accept_etab, fill = is_overseas)) +
+  geom_boxplot(na.rm = TRUE) +
+  labs(y = "Percentage of students",
+       fill = "Overseas territory",
+       title = "Average percentage of students coming from the same establishment") +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+
+```
+
+In this boxplot, we notice that universities in overseas territories tend to have more students from their own establishment than universities in metropolitan France. This phenomenon highlights the small number of metropolitan students moving to overseas, making those territories a bubble, appart from the rest of France.
+
+# Gender Distribution
+
+Another well-known disparity at university, particularly in the sciences since we are studying it, is the uneven distribution of male and female students. It is often said that STEM programs are dominated by men, whereas literary disciplines and human sciences tend to attract more women. Our dataset includes a series of nested categories describing the field of each master's program, by aggregating them into the broadest groups, we can graph the data to get a bird's-eye view of the situation.
+
+```{r}
+#| label: mosaic
+#| layout-ncol: 2
+#| lightbox:
+#|  group: mosaic
+
+# Useful function to make sex mosaic plots
+do_mosaic <- function(data, female, male, cat, wrap = 15, main = "", ...) {
+  data <- mutate(data, category = str_wrap(!!ensym(cat), wrap))
+  data |>
+    select(Female = !!ensym(female), Male = !!ensym(male)) |>
+    data.frame(row.names = as.character(data$category)) |>
+    mosaicplot(
+      main = main,
+      color = c("pink", "skyblue"),
+      ...
+    )
+}
+
+# Sex mosaic for the broader categories
+old_par <- par(mar = c(.5, 4, 3, 2))
+
+to_graph <- monmaster |>
+  summarize(
+    Female_can = sum(n_can_femme_pp + n_can_femme_pc),
+    Male_can = sum(n_can_pp + n_can_pc) - Female_can,
+    Female_accept = sum(n_accept_femme_total),
+    Male_accept = sum(n_accept_total) - Female_accept,
+    .by = disci_master
+  )
+
+do_mosaic(to_graph, Female_can, Male_can, disci_master, main = "Gender distribution across fields (by number of applications)")
+do_mosaic(to_graph, Female_accept, Male_accept, disci_master, main = "Gender distribution across fields (by number of acceptance)")
+
+par(old_par)
+
+```
+
+Surprisingly, women account for the most number of applications *and* acceptances in almost every category. The only field where men are the majority is fundamental and applied sciences, but even there, the margin is small. However, these domains are very broad which probably hide finer variations. Let us, for example, take a closer look specifically at **fundamental sciences**.
+
+```{r}
+#| label: mosaic-science
+
+# Detailed sex mosaic for scientific domains (by acceptance)
+old_par <- par(mar = c(0, 4, 0, 2))
+
+monmaster |>
+  filter(disci_master == "Sc fondamentales et appliquées (dont STAPS)") |>
+  summarize(
+    Female_accept = sum(n_accept_femme_total),
+    Male_accept = sum(n_accept_total) - Female_accept,
+    .by = secteur_disci_lib
+  ) |>
+  filter(Female_accept + Male_accept >= 1000) |>
+  do_mosaic(Female_accept, Male_accept, secteur_disci_lib, 30, las = 3)
+
+par(old_par)
+
+```
+
+Here we observe some greater differences that match with common conceptions of scientific fields. On one side, we have biology and medicine with a lot of students, mostly women; on the opposite side, mathematics, computer science and physics are mostly male dominated.
+
+```{r}
+#| label: m-f-freq
+
+# Percentage of men/women in scientific programs (for the text of the report)
+scientific <- monmaster |>
+  filter(disci_master == "Sc fondamentales et appliquées (dont STAPS)")
+
+tot <- sum(scientific$n_accept_total)
+f <- sum(scientific$n_accept_femme_total)
+m <- tot - f
+
+freq_f <- round(f / tot * 100)
+freq_m <- round(m / tot * 100)
+
+```
+
+The global share of scientific students may be `{r} freq_f`% women and `{r} freq_m`% men but when people say "science is male dominated", they think in term of fields and our graph shows that, indeed, only two domains have more female than male students.
+
+# Academic Background of Master's Students
+
+```{r}
+#| label: previous-year
+#| layout-ncol: 2
+#| lightbox:
+#|  group: previous-year
+
+nb_student <- monmaster |>
+  summarise(
+    Total = sum(n_accept_total),
+    Licence = sum(n_accept_lg3_total),
+    `Licence pro` = sum(n_accept_lp3_total),
+    Bachelor = sum(n_accept_but3_total),
+    Master = sum(n_accept_master_total),
+    Autre = sum(n_accept_autre_total),
+    `Non inscrit` = sum(n_accept_noninscri_total),
+    .by = acad
+  ) |>
+  inner_join(academies_metro, by = "acad") |>
+  mutate(center = geometry |> st_centroid() |> st_coordinates()) |>
+  mutate(
+    .keep = "unused",
+    x = center[, "X"],
+    y = center[, "Y"]
+  )
+# Note that nb_student is not an sf object anymore, which is good because it
+# interferes with geom_scatterpie
+
+do_previous_year_map <- function(data, scale.x, scale.y, labeller, ...) {
+  ggplot(data) +
+    geom_sf(data = st_as_sf, fill = "grey95", color = "black") +
+    geom_scatterpie(
+      aes(x, y, r = radius),
+      cols = c("Licence", "Licence pro", "Bachelor", "Master", "Autre", "Non inscrit"),
+      color = NA
+    ) +
+    geom_scatterpie_legend(data$radius, scale.x, scale.y, n = 3, labeller = labeller) +
+    scale_fill_brewer(palette = "Set3") +
+    labs(fill = "Enrollment the year prior",
+         ...) +
+    theme_void()
+}
+
+# Map everything except Île-de-France
+nb_student |>
+  filter(acad_reg != "R11") |>
+  mutate(radius = sqrt(Total) / 250) |>
+  do_previous_year_map(-4, 43, \(y) (y * 250)^2,
+    title = "Program students followed before being accepted in their Master's degree",
+    subtitle = "(Metropolitan France except Île-de-France region)",
+    caption = "(Bubble size represents the number of student)")
+
+# Map Île-de-France
+nb_student |>
+  filter(acad_reg == "R11") |>
+  mutate(radius = sqrt(Total) / 1200) |>
+  do_previous_year_map(1.5, 48.3, \(y) (y * 1200)^2,
+    title = "Program students followed before being accepted in their Master's degree",
+    subtitle = "(Île-de-France region only)",
+    caption = "(Bubble size represents the number of student)")
+
+```
+
+These two maps illustrate the academic background of students in France before they were accepted into a Master's degree program.
+The map on the left represents the metropolitan France (excluding the Île-de-France region), while the map on the right focuses on Île-de-France.
+
+Both visualisations use proportional pie charts where the size of the bubble represents the total number of students in each area. In every region, the **Licence** is clearly the most common pathway to a Master's program, as shown by the light blue segments.
+However, the Île-de-France region stands out due to its significantly higher volume of students and a more diverse range of previous enrollments, including a notable proportion of students categorized as 'Non inscrit' or 'Autre' the year prior. Which means that the Master's student population in the Paris region is highly diverse and includes a lot of international students who completed their previous degrees abroad, as well as professionals returning to university after a period of employment.
+
+
+# Code listing {.appendix}
+
+```{r}
+#| label: listing
+#| echo: true
+#| eval: false
+#| ref-label: !expr knitr::all_labels()
+```
